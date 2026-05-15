@@ -1275,6 +1275,7 @@ pub async fn handle_update_did_webvh(
         label: env.body.label,
     };
 
+    let config = state.config.read().await;
     let result = app_try!(
         operations::did_webvh::update_did_webvh(
             &state.keys_ks,
@@ -1282,6 +1283,7 @@ pub async fn handle_update_did_webvh(
             &state.webvh_ks,
             &state.audit_ks,
             &*state.seed_store,
+            &config,
             &auth,
             &env.scid,
             opts,
@@ -1326,6 +1328,7 @@ pub async fn handle_rotate_did_webvh_keys(
         label: env.body.label,
     };
 
+    let config = state.config.read().await;
     let result = app_try!(
         operations::did_webvh::rotate_did_webvh_keys(
             &state.keys_ks,
@@ -1333,6 +1336,7 @@ pub async fn handle_rotate_did_webvh_keys(
             &state.webvh_ks,
             &state.audit_ks,
             &*state.seed_store,
+            &config,
             &auth,
             &env.scid,
             opts,

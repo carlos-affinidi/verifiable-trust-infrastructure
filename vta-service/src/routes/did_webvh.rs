@@ -229,12 +229,14 @@ pub async fn update_did_handler(
         .did_resolver
         .as_ref()
         .ok_or_else(|| AppError::Internal("DID resolver not available".into()))?;
+    let config = state.config.read().await;
     let result = operations::did_webvh::update_did_webvh(
         &state.keys_ks,
         &state.contexts_ks,
         &state.webvh_ks,
         &state.audit_ks,
         &*state.seed_store,
+        &config,
         &auth.0,
         &scid,
         body,
@@ -259,12 +261,14 @@ pub async fn rotate_did_keys_handler(
         .did_resolver
         .as_ref()
         .ok_or_else(|| AppError::Internal("DID resolver not available".into()))?;
+    let config = state.config.read().await;
     let result = operations::did_webvh::rotate_did_webvh_keys(
         &state.keys_ks,
         &state.contexts_ks,
         &state.webvh_ks,
         &state.audit_ks,
         &*state.seed_store,
+        &config,
         &auth.0,
         &scid,
         body,

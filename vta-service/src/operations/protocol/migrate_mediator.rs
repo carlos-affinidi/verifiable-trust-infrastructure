@@ -186,12 +186,14 @@ pub async fn migrate_mediator(
     let patched = with_didcomm_service(current_doc, &resolved.mediator_did)?;
 
     // Publish new LogEntry.
+    let config_guard = config.read().await;
     let update_result = update_did_webvh(
         keys_ks,
         contexts_ks,
         webvh_ks,
         audit_ks,
         seed_store,
+        &config_guard,
         auth,
         &scid,
         UpdateDidWebvhOptions {
@@ -203,6 +205,7 @@ pub async fn migrate_mediator(
         channel,
     )
     .await?;
+    drop(config_guard);
 
     // Persist config: messaging.mediator_did = new.
     persist_new_mediator(config, &resolved.mediator_did, &resolved.endpoint).await?;

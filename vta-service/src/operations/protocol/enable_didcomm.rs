@@ -153,12 +153,14 @@ pub async fn enable_didcomm(
     // Publish via update_did_webvh — single source of truth for
     // LogEntry append. Rotates control keys; preserves
     // verificationMethod.
+    let config_guard = config.read().await;
     let update_result = update_did_webvh(
         keys_ks,
         contexts_ks,
         webvh_ks,
         audit_ks,
         seed_store,
+        &config_guard,
         auth,
         &scid,
         UpdateDidWebvhOptions {
@@ -170,6 +172,7 @@ pub async fn enable_didcomm(
         channel,
     )
     .await?;
+    drop(config_guard);
 
     // Persist config: services.didcomm = true and messaging.mediator_did.
     persist_didcomm_enabled(config, &resolved.mediator_did, &resolved.endpoint).await?;

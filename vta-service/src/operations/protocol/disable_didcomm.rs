@@ -160,12 +160,14 @@ pub async fn disable_didcomm(
     let patched = without_didcomm_service(current_doc);
 
     // Publish via update_did_webvh.
+    let config_guard = config.read().await;
     let update_result = update_did_webvh(
         keys_ks,
         contexts_ks,
         webvh_ks,
         audit_ks,
         seed_store,
+        &config_guard,
         auth,
         &scid,
         UpdateDidWebvhOptions {
@@ -177,6 +179,7 @@ pub async fn disable_didcomm(
         channel,
     )
     .await?;
+    drop(config_guard);
 
     // Persist config: services.didcomm = false. Leave `messaging`
     // intact so the drained listener can still reach the mediator

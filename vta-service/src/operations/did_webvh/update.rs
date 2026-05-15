@@ -31,10 +31,11 @@ use serde_json::Value;
 use vta_sdk::keys::KeyRecord;
 use vta_sdk::webvh::WebvhDidRecord;
 
-use super::WebvhTransport;
 use super::webvh_keys::{self, WebvhKeyHandle, WebvhKeyRole};
+use super::{WebvhRestAuthContext, WebvhTransport};
 use crate::audit;
 use crate::auth::AuthClaims;
+use crate::config::AppConfig;
 use crate::didcomm_bridge::DIDCommBridge;
 use crate::error::AppError;
 use crate::keys::paths::allocate_path;
@@ -453,6 +454,7 @@ pub async fn rotate_did_webvh_keys(
     webvh_ks: &KeyspaceHandle,
     audit_ks: &KeyspaceHandle,
     seed_store: &dyn SeedStore,
+    config: &AppConfig,
     auth: &AuthClaims,
     scid: &str,
     opts: RotateDidWebvhKeysOptions,
@@ -576,6 +578,7 @@ pub async fn rotate_did_webvh_keys(
         webvh_ks,
         audit_ks,
         seed_store,
+        config,
         auth,
         scid,
         UpdateDidWebvhOptions {
@@ -701,6 +704,7 @@ pub async fn update_did_webvh(
     webvh_ks: &KeyspaceHandle,
     audit_ks: &KeyspaceHandle,
     seed_store: &dyn SeedStore,
+    config: &AppConfig,
     auth: &AuthClaims,
     scid: &str,
     opts: UpdateDidWebvhOptions,
@@ -920,9 +924,17 @@ pub async fn update_did_webvh(
                     record.server_id
                 ))
             })?;
-        let transport = WebvhTransport::from_server(&server, did_resolver, didcomm_bridge)
-            .await
-            .map_err(|e| UpdateDidWebvhError::Publish(format!("transport: {e}")))?;
+        let rest_auth = WebvhRestAuthContext {
+            webvh_ks,
+            keys_ks,
+            seed_store,
+            config,
+            channel,
+        };
+        let transport =
+            WebvhTransport::from_server(&server, did_resolver, didcomm_bridge, &rest_auth)
+                .await
+                .map_err(|e| UpdateDidWebvhError::Publish(format!("transport: {e}")))?;
         transport
             .publish_did(&record.mnemonic, &new_log_jsonl)
             .await
