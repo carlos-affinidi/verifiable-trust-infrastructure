@@ -181,6 +181,9 @@ echo ""
 # Run VTA (not exec, so we can capture crash output). Call in an `if` so `set -eu`
 # does not abort on a non-zero exit before we log it and keep the console alive
 # (the new config-floor hard-exits make a crashed/rejected boot common).
+# EXPERIMENT (not for merge): one tokio worker thread, to test whether the
+# VTA's own cross-thread work lowers throughput on multi-vCPU enclaves.
+export TOKIO_WORKER_THREADS=1
 if vta-enclave --config "$CONFIG_PATH" 2>&1; then
     VTA_EXIT=0
 else
