@@ -28,6 +28,11 @@
 
 set -eu
 
+# EXPERIMENT (not for merge): pin this shell, and so every process it starts
+# (socat proxies, the VTA), to vCPU 0, to test whether scheduling across
+# enclave vCPUs is what lowers throughput on multi-vCPU enclaves.
+taskset -pc 0 $$ >/dev/null
+
 # ---------------------------------------------------------------------------
 # Port assignments (must match parent-proxy.sh)
 # ---------------------------------------------------------------------------
