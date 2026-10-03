@@ -15,6 +15,8 @@ pub(crate) mod encryption;
 
 #[cfg(feature = "vsock-store")]
 pub mod vsock;
+#[cfg(any(feature = "vsock-store", test))]
+mod vsock_pool;
 
 /// Timeout for blocking fjall operations. Prevents indefinite hangs if the
 /// store deadlocks or I/O stalls.
