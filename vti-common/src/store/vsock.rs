@@ -88,7 +88,7 @@ const DEFAULT_STORAGE_PORT: u32 = 5500;
 /// High enough that storage round trips stop being the bottleneck on the
 /// enclave sizes we run (1 to 6 vCPUs), low enough that a burst cannot open
 /// an unbounded number of sockets on the parent.
-const DEFAULT_MAX_CONNECTIONS: usize = 8;
+const DEFAULT_MAX_CONNECTIONS: usize = 32;
 
 /// A key-value store backed by the parent's storage proxy over vsock.
 ///
