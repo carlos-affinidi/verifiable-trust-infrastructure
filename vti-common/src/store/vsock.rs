@@ -12,6 +12,8 @@ use tracing::info;
 
 #[cfg(test)]
 use super::vsock_pool::MAX_MESSAGE_SIZE;
+/// EXPERIMENT (not for merge): see [`super::vsock_pool::take_stats`].
+pub use super::vsock_pool::take_stats as take_storage_stats;
 use super::vsock_pool::{BoxStream, ConnectionPool, Connector};
 use crate::error::AppError;
 

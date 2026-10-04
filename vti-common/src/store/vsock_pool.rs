@@ -22,7 +22,9 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Semaphore;
@@ -40,6 +42,35 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> FrameStream for T {}
 
 pub(crate) type BoxStream = Box<dyn FrameStream>;
 type ConnectFuture = Pin<Box<dyn Future<Output = Result<BoxStream, AppError>> + Send>>;
+
+/// EXPERIMENT (not for merge): cumulative storage statistics, drained by
+/// [`take_stats`].
+static OPS: AtomicU64 = AtomicU64::new(0);
+static RTT_US: AtomicU64 = AtomicU64::new(0);
+static WAIT_US: AtomicU64 = AtomicU64::new(0);
+static MAX_RTT_US: AtomicU64 = AtomicU64::new(0);
+static CONNECTS: AtomicU64 = AtomicU64::new(0);
+
+/// Storage statistics since the last call: operations, total round-trip
+/// microseconds, total microseconds waiting for a connection slot, the
+/// slowest round trip, and connections opened.
+pub fn take_stats() -> [u64; 5] {
+    [
+        OPS.swap(0, Ordering::Relaxed),
+        RTT_US.swap(0, Ordering::Relaxed),
+        WAIT_US.swap(0, Ordering::Relaxed),
+        MAX_RTT_US.swap(0, Ordering::Relaxed),
+        CONNECTS.swap(0, Ordering::Relaxed),
+    ]
+}
+
+fn record(waited: std::time::Duration, rtt: std::time::Duration) {
+    let rtt = rtt.as_micros() as u64;
+    OPS.fetch_add(1, Ordering::Relaxed);
+    RTT_US.fetch_add(rtt, Ordering::Relaxed);
+    WAIT_US.fetch_add(waited.as_micros() as u64, Ordering::Relaxed);
+    MAX_RTT_US.fetch_max(rtt, Ordering::Relaxed);
+}
 
 /// Opens a new connection to the storage proxy.
 pub(crate) type Connector = Arc<dyn Fn() -> ConnectFuture + Send + Sync>;
@@ -71,15 +102,19 @@ impl ConnectionPool {
     /// one, and retries once on a fresh connection if the idle one fails (it
     /// may have been closed by the parent).
     pub(crate) async fn request(&self, payload: &[u8]) -> Result<Vec<u8>, AppError> {
+        let t0 = Instant::now();
         let _permit = self
             .permits
             .acquire()
             .await
             .map_err(|_| AppError::Internal("storage connection pool closed".into()))?;
+        let waited = t0.elapsed();
 
         if let Some(mut stream) = self.take_idle() {
+            let t1 = Instant::now();
             match round_trip(&mut stream, payload).await {
                 Ok(resp) => {
+                    record(waited, t1.elapsed());
                     self.put_idle(stream);
                     return Ok(resp);
                 }
@@ -88,8 +123,11 @@ impl ConnectionPool {
         }
 
         let mut stream = (self.connect)().await?;
+        CONNECTS.fetch_add(1, Ordering::Relaxed);
         trace!("storage connection opened");
+        let t1 = Instant::now();
         let resp = round_trip(&mut stream, payload).await?;
+        record(waited, t1.elapsed());
         self.put_idle(stream);
         Ok(resp)
     }

@@ -136,6 +136,8 @@ async fn main() {
         let vsock_writer = vsock_log::start().await;
         eprintln!("vsock writer started, initializing tracing...");
         vta_service::init_tracing_with_writer(&config, vsock_writer);
+        #[cfg(feature = "vsock-store")]
+        tokio::spawn(lt_stats());
     }
     #[cfg(not(feature = "vsock-log"))]
     {
@@ -728,5 +730,61 @@ mod tests {
             v.contains("[tee.kms]"),
             "missing-kms should be reported before admin_did: {v}"
         );
+    }
+}
+
+/// EXPERIMENT (not for merge): every 5 s, log enclave CPU (whole enclave and
+/// this process) and vsock storage statistics.
+#[cfg(all(feature = "vsock-log", feature = "vsock-store"))]
+async fn lt_stats() {
+    fn cpu_total() -> Option<(u64, u64)> {
+        let s = std::fs::read_to_string("/proc/stat").ok()?;
+        let v: Vec<u64> = s
+            .lines()
+            .next()?
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        let idle = v.get(3)? + v.get(4).unwrap_or(&0);
+        Some((v.iter().sum(), idle))
+    }
+    fn proc_ticks() -> Option<u64> {
+        let s = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let rest = s.rsplit_once(')')?.1;
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
+    }
+    let cpus = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1) as f64;
+    let (mut t0, mut i0) = cpu_total().unwrap_or((0, 0));
+    let mut p0 = proc_ticks().unwrap_or(0);
+    let mut last = std::time::Instant::now();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        tick.tick().await;
+        let (t1, i1) = cpu_total().unwrap_or((t0, i0));
+        let p1 = proc_ticks().unwrap_or(p0);
+        let secs = last.elapsed().as_secs_f64();
+        last = std::time::Instant::now();
+        let dt = (t1 - t0).max(1) as f64;
+        let enclave_busy = 100.0 * (1.0 - (i1 - i0) as f64 / dt);
+        // USER_HZ is 100 on Linux.
+        let vta_cores = (p1 - p0) as f64 / 100.0 / secs;
+        let [ops, rtt, wait, max_rtt, connects] = vti_common::store::vsock::take_storage_stats();
+        tracing::info!(
+            target: "lt_stats",
+            cpus,
+            enclave_busy_pct = format!("{enclave_busy:.1}"),
+            vta_cores = format!("{vta_cores:.3}"),
+            storage_ops_per_s = format!("{:.1}", ops as f64 / secs),
+            storage_rtt_avg_us = rtt / ops.max(1),
+            storage_rtt_max_us = max_rtt,
+            storage_wait_avg_us = wait / ops.max(1),
+            storage_connects = connects,
+            "lt stats"
+        );
+        (t0, i0, p0) = (t1, i1, p1);
     }
 }

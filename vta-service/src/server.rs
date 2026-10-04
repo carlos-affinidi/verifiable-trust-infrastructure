@@ -28,7 +28,7 @@ use crate::routes;
 use crate::store::{KeyspaceHandle, Store};
 use tokio::sync::{RwLock, watch};
 #[cfg(feature = "rest")]
-use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use tracing::{debug, error, info, warn};
 
@@ -1831,7 +1831,14 @@ fn run_rest_thread(
         .layer(axum::middleware::from_fn(crate::metrics::track_metrics))
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                // EXPERIMENT (not for merge): a request id on every span, so
+                // the lines of one request can be correlated.
+                .make_span_with(|req: &axum::http::Request<axum::body::Body>| {
+                    static NEXT_RID: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    let rid = NEXT_RID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::info_span!("request", method = %req.method(), uri = %req.uri(), rid)
+                })
                 .on_request(DefaultOnRequest::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         );
