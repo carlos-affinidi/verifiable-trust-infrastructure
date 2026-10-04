@@ -137,10 +137,20 @@ impl AuditWriter {
         };
         envelope.entry_hash = envelope.chain_digest();
 
-        self.audit_ks
-            .insert((self.storage_key)(&envelope), &envelope)
-            .await?;
+        // EXPERIMENT (not for merge): advance the head and release the chain
+        // lock before the storage round trip, so audited operations no longer
+        // queue on it. Not crash-safe: a failed insert leaves a gap that later
+        // envelopes chain over; here it only resets the head.
         *head = Some(envelope.entry_hash);
+        drop(head);
+        if let Err(e) = self
+            .audit_ks
+            .insert((self.storage_key)(&envelope), &envelope)
+            .await
+        {
+            *self.chain_head.lock().await = None;
+            return Err(e);
+        }
         Ok(envelope)
     }
 
