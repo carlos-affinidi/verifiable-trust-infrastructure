@@ -755,6 +755,39 @@ async fn lt_stats() {
         let f: Vec<&str> = rest.split_whitespace().collect();
         Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
     }
+    // Per-vCPU (total, idle) jiffies, in `/proc/stat` order.
+    fn cpu_each() -> Vec<(u64, u64)> {
+        let Ok(s) = std::fs::read_to_string("/proc/stat") else {
+            return Vec::new();
+        };
+        s.lines()
+            .filter(|l| l.starts_with("cpu") && !l.starts_with("cpu "))
+            .map(|l| {
+                let v: Vec<u64> = l
+                    .split_whitespace()
+                    .skip(1)
+                    .filter_map(|x| x.parse().ok())
+                    .collect();
+                (
+                    v.iter().sum(),
+                    v.get(3).unwrap_or(&0) + v.get(4).unwrap_or(&0),
+                )
+            })
+            .collect()
+    }
+    fn socat_count() -> usize {
+        std::fs::read_dir("/proc")
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter(|e| {
+                        std::fs::read_to_string(e.path().join("comm"))
+                            .is_ok_and(|c| c.trim() == "socat")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+    let mut each0 = cpu_each();
     let cpus = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1) as f64;
@@ -774,6 +807,19 @@ async fn lt_stats() {
         let vta_cores = (p1 - p0) as f64 / 100.0 / secs;
         let [ops, rtt, wait, max_rtt, connects] = vti_common::store::vsock::take_storage_stats();
         let [write_us, reply_us] = vti_common::store::vsock::take_storage_split();
+        let each1 = cpu_each();
+        let per_cpu = each1
+            .iter()
+            .zip(&each0)
+            .map(|((t1, i1), (t0, i0))| {
+                format!(
+                    "{:.0}",
+                    100.0 * (1.0 - (i1 - i0) as f64 / (t1 - t0).max(1) as f64)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        each0 = each1;
         let by_op = vti_common::store::vsock::take_storage_by_op()
             .into_iter()
             .map(|(k, n)| format!("{k}={n}"))
@@ -792,6 +838,8 @@ async fn lt_stats() {
             storage_write_avg_us = write_us / ops.max(1),
             storage_reply_avg_us = reply_us / ops.max(1),
             storage_by_op = by_op,
+            per_cpu_busy_pct = per_cpu,
+            socat_procs = socat_count(),
             "lt stats"
         );
         (t0, i0, p0) = (t1, i1, p1);
