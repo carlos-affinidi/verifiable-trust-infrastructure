@@ -72,10 +72,10 @@ ip link set lo up 2>/dev/null || true
 # ---------------------------------------------------------------------------
 # Start inbound proxy: vsock → VTA REST API
 # ---------------------------------------------------------------------------
-echo "Starting inbound proxy: vsock:${VSOCK_INBOUND_PORT} → localhost:${VTA_PORT}"
-socat VSOCK-LISTEN:${VSOCK_INBOUND_PORT},reuseaddr,fork \
-    TCP-CONNECT:127.0.0.1:${VTA_PORT} &
-INBOUND_PID=$!
+# EXPERIMENT (not for merge): the VTA listens on vsock itself.
+echo "Inbound: the VTA serves REST on vsock:${VSOCK_INBOUND_PORT} directly"
+export VTA_REST_VSOCK_PORT="${VSOCK_INBOUND_PORT}"
+INBOUND_PID=
 
 # ---------------------------------------------------------------------------
 # Start outbound proxy: VTA mediator → parent (for DIDComm WebSocket)
