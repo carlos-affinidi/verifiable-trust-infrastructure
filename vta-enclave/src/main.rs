@@ -773,6 +773,12 @@ async fn lt_stats() {
         // USER_HZ is 100 on Linux.
         let vta_cores = (p1 - p0) as f64 / 100.0 / secs;
         let [ops, rtt, wait, max_rtt, connects] = vti_common::store::vsock::take_storage_stats();
+        let [write_us, reply_us] = vti_common::store::vsock::take_storage_split();
+        let by_op = vti_common::store::vsock::take_storage_by_op()
+            .into_iter()
+            .map(|(k, n)| format!("{k}={n}"))
+            .collect::<Vec<_>>()
+            .join(",");
         tracing::info!(
             target: "lt_stats",
             cpus,
@@ -783,6 +789,9 @@ async fn lt_stats() {
             storage_rtt_max_us = max_rtt,
             storage_wait_avg_us = wait / ops.max(1),
             storage_connects = connects,
+            storage_write_avg_us = write_us / ops.max(1),
+            storage_reply_avg_us = reply_us / ops.max(1),
+            storage_by_op = by_op,
             "lt stats"
         );
         (t0, i0, p0) = (t1, i1, p1);

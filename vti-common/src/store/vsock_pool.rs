@@ -50,6 +50,43 @@ static RTT_US: AtomicU64 = AtomicU64::new(0);
 static WAIT_US: AtomicU64 = AtomicU64::new(0);
 static MAX_RTT_US: AtomicU64 = AtomicU64::new(0);
 static CONNECTS: AtomicU64 = AtomicU64::new(0);
+static WRITE_US: AtomicU64 = AtomicU64::new(0);
+static REPLY_US: AtomicU64 = AtomicU64::new(0);
+static BY_OP: Mutex<Option<std::collections::BTreeMap<String, u64>>> = Mutex::new(None);
+
+/// EXPERIMENT: total microseconds spent writing requests and waiting for the
+/// first reply byte, since the last call.
+pub fn take_split() -> [u64; 2] {
+    [
+        WRITE_US.swap(0, Ordering::Relaxed),
+        REPLY_US.swap(0, Ordering::Relaxed),
+    ]
+}
+
+/// EXPERIMENT: operations per `<opcode>:<keyspace>` since the last call.
+pub fn take_by_op() -> std::collections::BTreeMap<String, u64> {
+    BY_OP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+        .unwrap_or_default()
+}
+
+fn count_op(payload: &[u8]) {
+    let op = payload.first().copied().unwrap_or(0);
+    let ks = payload
+        .get(1..3)
+        .map(|l| u16::from_be_bytes([l[0], l[1]]) as usize)
+        .and_then(|n| payload.get(3..3 + n))
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    *BY_OP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(Default::default)
+        .entry(format!("{op}:{ks}"))
+        .or_default() += 1;
+}
 
 /// Storage statistics since the last call: operations, total round-trip
 /// microseconds, total microseconds waiting for a connection slot, the
@@ -102,6 +139,7 @@ impl ConnectionPool {
     /// one, and retries once on a fresh connection if the idle one fails (it
     /// may have been closed by the parent).
     pub(crate) async fn request(&self, payload: &[u8]) -> Result<Vec<u8>, AppError> {
+        count_op(payload);
         let t0 = Instant::now();
         let _permit = self
             .permits
@@ -157,6 +195,7 @@ impl ConnectionPool {
 
 /// Write one length-prefixed request frame and read one response frame.
 async fn round_trip(stream: &mut BoxStream, payload: &[u8]) -> Result<Vec<u8>, AppError> {
+    let t0 = Instant::now();
     let len = u32::try_from(payload.len())
         .map_err(|_| AppError::Internal("storage request too large".into()))?;
     stream
@@ -171,11 +210,14 @@ async fn round_trip(stream: &mut BoxStream, payload: &[u8]) -> Result<Vec<u8>, A
         .flush()
         .await
         .map_err(AppError::vsock("vsock flush"))?;
+    let t1 = Instant::now();
 
     let len = stream
         .read_u32()
         .await
         .map_err(AppError::vsock("vsock read"))?;
+    WRITE_US.fetch_add((t1 - t0).as_micros() as u64, Ordering::Relaxed);
+    REPLY_US.fetch_add(t1.elapsed().as_micros() as u64, Ordering::Relaxed);
     if len > MAX_MESSAGE_SIZE {
         return Err(AppError::Internal(format!(
             "vsock response too large: {len} > {MAX_MESSAGE_SIZE}"

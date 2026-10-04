@@ -15,6 +15,8 @@ use super::vsock_pool::MAX_MESSAGE_SIZE;
 /// EXPERIMENT (not for merge): see [`super::vsock_pool::take_stats`].
 pub use super::vsock_pool::take_stats as take_storage_stats;
 use super::vsock_pool::{BoxStream, ConnectionPool, Connector};
+/// EXPERIMENT (not for merge).
+pub use super::vsock_pool::{take_by_op as take_storage_by_op, take_split as take_storage_split};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
