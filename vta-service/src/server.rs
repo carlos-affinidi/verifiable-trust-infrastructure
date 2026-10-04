@@ -1790,8 +1790,12 @@ fn run_rest_thread(
     state: AppState,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    // EXPERIMENT (not for merge): REST on a multi-threaded runtime (one worker
+    // per CPU, or TOKIO_WORKER_THREADS), so request handling is not confined
+    // to one thread.
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_name("vta-rest-worker")
         .build()
         .expect("failed to build REST runtime");
 
