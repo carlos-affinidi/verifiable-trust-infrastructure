@@ -134,9 +134,16 @@ fn key_storage_key(key_id: &KeyId) -> Vec<u8> {
 /// async. Concurrent rotations on the same store are *not*
 /// serialised in this layer — the caller (services) owns the
 /// invariant that rotation happens from a single coordinator path.
+///
+/// The active key is cached after the first read and shared by every clone:
+/// it is read on every audited operation and changes only through
+/// [`Self::set_active`], which drops the cache. A key rotated through a
+/// *different* `AuditKeyStore` on the same keyspace is not seen until restart,
+/// so rotate through the instance the writer uses.
 #[derive(Clone)]
 pub struct AuditKeyStore {
     ks: KeyspaceHandle,
+    active: std::sync::Arc<std::sync::Mutex<Option<AuditKey>>>,
 }
 
 /// HKDF info string for a VTC's audit key. The `/v2` is the rework recorded
@@ -153,13 +160,33 @@ impl AuditKeyStore {
     /// Wrap a keyspace handle. The caller is responsible for
     /// configuring encryption-at-rest if desired.
     pub fn new(ks: KeyspaceHandle) -> Self {
-        Self { ks }
+        Self {
+            ks,
+            active: Default::default(),
+        }
+    }
+
+    fn cached_active(&self) -> Option<AuditKey> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn cache_active(&self, key: &AuditKey) {
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.clone());
     }
 
     /// Read the currently active key. Returns
     /// [`AppError::NotFound`] if no initial key has been derived yet
     /// — callers should invoke [`Self::ensure_initial`] on boot.
     pub async fn active(&self) -> Result<AuditKey, AppError> {
+        if let Some(key) = self.cached_active() {
+            return Ok(key);
+        }
         let id_bytes = self
             .ks
             .get_raw(ACTIVE_MARKER_KEY.to_vec())
@@ -175,11 +202,13 @@ impl AuditKeyStore {
             Uuid::parse_str(&id_str)
                 .map_err(|e| AppError::Internal(format!("invalid audit_key uuid: {e}")))?,
         );
-        self.fetch(&key_id).await?.ok_or_else(|| {
+        let key = self.fetch(&key_id).await?.ok_or_else(|| {
             AppError::Internal(format!(
                 "active marker points at unknown audit_key {key_id}"
             ))
-        })
+        })?;
+        self.cache_active(&key);
+        Ok(key)
     }
 
     /// Fetch a specific key by id. Used by verifiers walking history
@@ -332,6 +361,9 @@ impl AuditKeyStore {
     /// establishing one — the question a sink asks before deciding whether
     /// this write is the one that opens the chain.
     pub async fn try_active(&self) -> Result<Option<AuditKey>, AppError> {
+        if let Some(key) = self.cached_active() {
+            return Ok(Some(key));
+        }
         let id_bytes = match self.ks.get_raw(ACTIVE_MARKER_KEY.to_vec()).await? {
             Some(b) => b,
             None => return Ok(None),
@@ -342,7 +374,11 @@ impl AuditKeyStore {
             Uuid::parse_str(&id_str)
                 .map_err(|e| AppError::Internal(format!("invalid audit_key uuid: {e}")))?,
         );
-        self.fetch(&key_id).await
+        let key = self.fetch(&key_id).await?;
+        if let Some(key) = &key {
+            self.cache_active(key);
+        }
+        Ok(key)
     }
 
     async fn persist(&self, key: &AuditKey) -> Result<(), AppError> {
@@ -350,6 +386,12 @@ impl AuditKeyStore {
     }
 
     async fn set_active(&self, key_id: &KeyId) -> Result<(), AppError> {
+        // Drop the cache first: if the write fails, the next read goes to the
+        // store rather than trusting a key that may no longer be active.
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.ks
             .insert_raw(
                 ACTIVE_MARKER_KEY.to_vec(),
